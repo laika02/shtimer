@@ -7,7 +7,6 @@ Lightweight terminal timer with an ASCII countdown visualizer and repeating alar
 - Run durations like `1m`, `30s`, `2h`, and `1h 2m 30s`
 - Animated stacked countdown for hours, minutes, and seconds
 - Repeating alarm until `Ctrl+C`
-- Spacebar pause and resume during countdown
 - No build step and no external dependencies beyond common Linux audio tools
 
 ## Usage
@@ -51,7 +50,7 @@ When the countdown reaches zero, the script tries these playback methods in orde
 
 ## Controls
 
-- `Space` pauses or resumes the countdown
+- `P` pauses or resumes the countdown
 - `Ctrl+C` stops the alarm after the timer reaches zero
 
 ## Notes

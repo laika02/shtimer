@@ -105,7 +105,7 @@ draw_countdown() {
 
   total="$1"
   remaining="$2"
-  paused="$3"
+  paused="${3:-0}"
   formatted="$(format_time "$remaining")"
   seconds="$(unit_count "$remaining" 60)"
 
@@ -127,8 +127,8 @@ draw_countdown() {
   minute_row="$(unit_row "$minutes" 60 '#')"
   second_row="$(unit_row "$seconds" 60 '=')"
 
-  printf '\033[H'
-  if [[ "$paused" == "1" ]]; then
+  printf '\033[2J\033[H'
+  if (( paused == 1 )); then
     printf 'Timer %s [PAUSED]\n' "$formatted"
   else
     printf 'Timer %s\n' "$formatted"
@@ -138,7 +138,7 @@ draw_countdown() {
   printf 'M %3d |%s|\n' "$minutes" "$minute_row"
   printf 'S %3d |%s|\n' "$seconds" "$second_row"
   printf '\n'
-  printf 'Space pauses/resumes.\n'
+  printf 'Press P to pause/resume.\n'
 }
 
 play_alarm_once() {
@@ -157,6 +157,9 @@ play_alarm_once() {
 
 cleanup_terminal() {
   if [[ -t 1 ]]; then
+    if [[ -n "${ORIGINAL_STTY:-}" ]]; then
+      stty "$ORIGINAL_STTY" >/dev/null 2>&1 || true
+    fi
     printf '\033[?25h\033[0m'
   fi
 }
@@ -169,35 +172,28 @@ stop_alarm() {
 }
 
 run_timer() {
-  local total remaining paused key substeps
+  local total remaining paused key substep
   total="$1"
 
   if [[ -t 1 ]]; then
+    ORIGINAL_STTY="$(stty -g)"
+    stty -echo -icanon isig min 0 time 0
     printf '\033[2J\033[H\033[?25l'
     remaining="$total"
     paused=0
     while (( remaining > 0 )); do
       draw_countdown "$total" "$remaining" "$paused"
-      substeps=10
-      while (( substeps > 0 )); do
+      substep=0
+      while (( substep < 10 )); do
         key=''
-        if read -rsn1 -t 0.1 key; then
-          if [[ "$key" == ' ' ]]; then
-            if (( paused == 0 )); then
-              paused=1
-            else
-              paused=0
-            fi
-            draw_countdown "$total" "$remaining" "$paused"
-          fi
+        IFS= read -r -s -N 1 -t 0.1 key < /dev/tty || true
+        if [[ "$key" == 'p' || "$key" == 'P' ]]; then
+          paused="$((1 - paused))"
+          draw_countdown "$total" "$remaining" "$paused"
         fi
 
         if (( paused == 0 )); then
-          substeps="$((substeps - 1))"
-        fi
-
-        if (( paused == 1 )); then
-          continue
+          substep="$((substep + 1))"
         fi
       done
       remaining="$((remaining - 1))"
