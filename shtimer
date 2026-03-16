@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./shtimer <duration> [duration...]
+
+Examples:
+  ./shtimer 30s
+  ./shtimer 1m
+  ./shtimer 2h
+  ./shtimer 1h 2m 30s
+
+Supported units:
+  s  seconds
+  m  minutes
+  h  hours
+EOF
+}
+
+format_time() {
+  local total hours minutes seconds
+  total="$1"
+  hours="$((total / 3600))"
+  minutes="$(((total % 3600) / 60))"
+  seconds="$((total % 60))"
+
+  if (( hours > 0 )); then
+    printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
+  else
+    printf '%02d:%02d' "$minutes" "$seconds"
+  fi
+}
+
+duration_to_seconds() {
+  local input unit value total=0
+
+  if (( $# == 0 )); then
+    return 1
+  fi
+
+  for input in "$@"; do
+    input="${input,,}"
+
+    if [[ ! "$input" =~ ^([0-9]+)([smh])$ ]]; then
+      return 1
+    fi
+
+    value="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+
+    case "$unit" in
+      s) total="$((total + value))" ;;
+      m) total="$((total + value * 60))" ;;
+      h) total="$((total + value * 3600))" ;;
+      *) return 1 ;;
+    esac
+  done
+
+  printf '%s\n' "$total"
+}
+
+repeat_char() {
+  local count char
+  count="$1"
+  char="$2"
+
+  if (( count <= 0 )); then
+    return 0
+  fi
+
+  printf '%*s' "$count" '' | tr ' ' "$char"
+}
+
+unit_count() {
+  local remaining size
+  remaining="$1"
+  size="$2"
+
+  if (( remaining <= 0 )); then
+    printf '0\n'
+    return 0
+  fi
+
+  printf '%s\n' "$((((remaining - 1) % size) + 1))"
+}
+
+unit_row() {
+  local count width char
+  count="$1"
+  width="$2"
+  char="$3"
+
+  if (( count > width )); then
+    count="$width"
+  fi
+
+  printf '%s%s' "$(repeat_char "$count" "$char")" "$(repeat_char "$((width - count))" ' ')"
+}
+
+draw_countdown() {
+  local total remaining paused formatted hours minutes seconds
+  local hour_row minute_row second_row
+
+  total="$1"
+  remaining="$2"
+  paused="$3"
+  formatted="$(format_time "$remaining")"
+  seconds="$(unit_count "$remaining" 60)"
+
+  if (( total >= 3600 )); then
+    hours="$((remaining / 3600))"
+  else
+    hours=0
+  fi
+
+  if (( total >= 3600 )); then
+    minutes="$(((remaining % 3600) / 60))"
+  elif (( total >= 60 )); then
+    minutes="$((remaining / 60))"
+  else
+    minutes=0
+  fi
+
+  hour_row="$(unit_row "$hours" 60 'O')"
+  minute_row="$(unit_row "$minutes" 60 '#')"
+  second_row="$(unit_row "$seconds" 60 '=')"
+
+  printf '\033[H'
+  if [[ "$paused" == "1" ]]; then
+    printf 'Timer %s [PAUSED]\n' "$formatted"
+  else
+    printf 'Timer %s\n' "$formatted"
+  fi
+  printf '\n'
+  printf 'H %3d |%s|\n' "$hours" "$hour_row"
+  printf 'M %3d |%s|\n' "$minutes" "$minute_row"
+  printf 'S %3d |%s|\n' "$seconds" "$second_row"
+  printf '\n'
+  printf 'Space pauses/resumes.\n'
+}
+
+play_alarm_once() {
+  if command -v canberra-gtk-play >/dev/null 2>&1; then
+    canberra-gtk-play -i alarm-clock-elapsed >/dev/null 2>&1 && return 0
+    canberra-gtk-play -i bell >/dev/null 2>&1 && return 0
+  fi
+
+  if command -v speaker-test >/dev/null 2>&1; then
+    speaker-test -t sine -f 880 -l 1 >/dev/null 2>&1 && return 0
+  fi
+
+  printf '\a'
+  sleep 1
+}
+
+cleanup_terminal() {
+  if [[ -t 1 ]]; then
+    printf '\033[?25h\033[0m'
+  fi
+}
+
+stop_alarm() {
+  trap - EXIT
+  cleanup_terminal
+  printf '\nStopped.\n'
+  exit 0
+}
+
+run_timer() {
+  local total remaining paused key substeps
+  total="$1"
+
+  if [[ -t 1 ]]; then
+    printf '\033[2J\033[H\033[?25l'
+    remaining="$total"
+    paused=0
+    while (( remaining > 0 )); do
+      draw_countdown "$total" "$remaining" "$paused"
+      substeps=10
+      while (( substeps > 0 )); do
+        key=''
+        if read -rsn1 -t 0.1 key; then
+          if [[ "$key" == ' ' ]]; then
+            if (( paused == 0 )); then
+              paused=1
+            else
+              paused=0
+            fi
+            draw_countdown "$total" "$remaining" "$paused"
+          fi
+        fi
+
+        if (( paused == 0 )); then
+          substeps="$((substeps - 1))"
+        fi
+
+        if (( paused == 1 )); then
+          continue
+        fi
+      done
+      remaining="$((remaining - 1))"
+    done
+    draw_countdown "$total" 0 0
+    printf "Time's up.\n"
+    printf 'Ctrl+C stops the alarm.\n'
+    return 0
+  fi
+
+  sleep "$total"
+  printf "Time's up.\n"
+  printf 'Ctrl+C stops the alarm.\n'
+}
+
+main() {
+  local seconds duration_display
+
+  if [[ $# -lt 1 ]]; then
+    usage >&2
+    exit 1
+  fi
+
+  duration_display="$*"
+  if ! seconds="$(duration_to_seconds "$@")"; then
+    printf 'Invalid duration: %s\n' "$duration_display" >&2
+    usage >&2
+    exit 1
+  fi
+
+  trap stop_alarm INT
+  trap cleanup_terminal EXIT
+
+  if [[ ! -t 1 ]]; then
+    printf 'Timer started for %s. Press Ctrl+C to stop the alarm once it starts.\n' "$duration_display"
+  fi
+
+  run_timer "$seconds"
+
+  while true; do
+    play_alarm_once
+    sleep 1
+  done
+}
+
+main "$@"
